@@ -586,28 +586,74 @@ readdir_r (_WDIR *dirp, struct _wdirent *entry, struct _wdirent **result)
 #endif // def WINDOWS
 
 #ifndef RELEASE
+static void
+set_user_executable (const char *path)
+{
+	int r;
+	do
+		r = chmod (path, S_IRUSR | S_IWUSR | S_IXUSR);
+	while (r == -1 && errno == EINTR);
+
+	if (r == -1)
+		log_error (LOG_DEFAULT, "chmod(\"%s\") failed: %s", path, strerror (errno));
+}
 
 static void
-copy_monosgen_to_internal_location(char *to, char *from)
+copy_file_to_internal_location(char *to, char *from, char* file)
 {
-	char *from_libmonoso = path_combine (from, "libmonosgen-2.0.so");
+	char *from_file = path_combine (from, file);
 
-	if (!file_exists (from_libmonoso))
+	if (!file_exists (from_file))
 	{
-		free (from_libmonoso);
+		free (from_file);
 		return;
 	}
 
-	log_warn (LOG_DEFAULT, "Copying sgen from external location %s to internal location %s", from, to);
+	log_warn (LOG_DEFAULT, "Copying file %s from external location %s to internal location %s",
+		file, from, to);
 
-	char *to_libmonoso = path_combine (to, "libmonosgen-2.0.so");
-	unlink (to_libmonoso);
+	char *to_file = path_combine (to, file);
+	unlink (to_file);
 
-	if (file_copy (to_libmonoso, from_libmonoso) < 0)
+	if (file_copy (to_file, from_file) < 0)
 		log_warn (LOG_DEFAULT, "Copy failed: %s", strerror (errno));
 
-	free (from_libmonoso);
-	free (to_libmonoso);
+	set_user_executable (to_file);
+
+	free (from_file);
+	free (to_file);
+}
+
+static void
+copy_native_libraries_to_internal_location (void)
+{
+	int i;
+
+	for (i = 0; i < MAX_OVERRIDES; ++i) {
+		monodroid_dir_t *dir;
+		monodroid_dirent_t b, *e;
+
+		const char *dir_path = path_combine (override_dirs [i], "lib");
+		log_warn (LOG_DEFAULT, "checking directory: `%s`", dir_path);
+
+		if (dir_path == NULL || !directory_exists (dir_path)) {
+			free (dir_path);
+			continue;
+		}
+
+		if ((dir = monodroid_opendir (dir_path)) == NULL) {
+			free (dir_path);
+			continue;
+		}
+
+		while (readdir_r (dir, &b, &e) == 0 && e) {
+			if (monodroid_dirent_hasextension (e, ".so")) {
+				copy_file_to_internal_location (primary_override_dir, dir_path, e->d_name);
+			}
+		}
+		monodroid_closedir (dir);
+		free (dir_path);
+	}
 }
 #endif
 
@@ -643,8 +689,7 @@ get_libmonosgen_path ()
 	// Android 5 includes some restrictions on loading dynamic libraries via dlopen() from
 	// external storage locations so we need to file copy the shared object to an internal
 	// storage location before loading it.
-	copy_monosgen_to_internal_location (primary_override_dir, external_override_dir);
-	copy_monosgen_to_internal_location (primary_override_dir, external_legacy_override_dir);
+	copy_native_libraries_to_internal_location ();
 
 	int i;
 	for (i = 0; i < MAX_OVERRIDES; ++i)
@@ -2455,44 +2500,6 @@ set_world_accessable (const char *path)
 
 	if (r == -1)
 		log_error (LOG_DEFAULT, "chmod(\"%s\", 0664) failed: %s", path, strerror (errno));
-}
-
-static void
-set_user_executable (const char *path)
-{
-	int r;
-	do
-		r = chmod (path, S_IRUSR | S_IWUSR | S_IXUSR);
-	while (r == -1 && errno == EINTR);
-
-	if (r == -1)
-		log_error (LOG_DEFAULT, "chmod(\"%s\") failed: %s", path, strerror (errno));
-}
-
-static void
-copy_file_to_internal_location(char *to, char *from, char* file)
-{
-	char *from_file = path_combine (from, file);
-
-	if (!file_exists (from_file))
-	{
-		free (from_file);
-		return;
-	}
-
-	log_warn (LOG_DEFAULT, "Copying file %s from external location %s to internal location %s",
-		file, from, to);
-
-	char *to_file = path_combine (to, file);
-	unlink (to_file);
-
-	if (file_copy (to_file, from_file) < 0)
-		log_warn (LOG_DEFAULT, "Copy failed: %s", strerror (errno));
-
-	set_user_executable (to_file);
-
-	free (from_file);
-	free (to_file);
 }
 #else  /* !defined (ANDROID) */
 #ifdef DEBUG
